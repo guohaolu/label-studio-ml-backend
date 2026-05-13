@@ -1,8 +1,14 @@
 
-from typing import Type, Dict, Optional, List, Tuple, Any, Union
-from pydantic import BaseModel, confloat, Field
-from label_studio_sdk.label_interface.objects import PredictionValue
-from typing import Union, List
+from typing import Dict, Optional, List, Any, Union
+from pydantic import BaseModel
+
+try:
+    from label_studio_sdk.label_interface.objects import PredictionValue
+except Exception:  # pragma: no cover - fallback for SDK layout differences
+    class PredictionValue(BaseModel):
+        result: List[Dict[str, Any]]
+        score: float = 0.0
+        model_version: Optional[str] = None
 
 
 # one or multiple predictions per task

@@ -7,17 +7,14 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from label_studio_ml.model import LabelStudioMLBase
-from label_studio_ml.response import ModelResponse
-from label_studio_sdk.label_interface.objects import PredictionValue
+from label_studio_ml.response import ModelResponse, PredictionValue
 
 from express_ac import get_express_automaton, iter_express_matches
-from express_doris import extract_express_candidates, lookup_express_numbers
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +30,7 @@ _PLAN_LS_LABEL = "发货计划单号"
 _SZD_LS_LABEL = "送装单号"
 _MERGE_LS_LABEL = "合并单号"
 
-# 快递面单：与 <Label value="快递面单"/> 一致；匹配逻辑在 express_ac / express_doris，不在此文件写正则
+# 快递面单：与 <Label value="快递面单"/> 一致；匹配逻辑由 express_ac 提供
 _EXPRESS_LS_LABEL = "快递面单"
 
 # YYYYMMDD：年份 19xx/20xx + 月 01-12 + 日 01-31（与业务单号中嵌入的日期格式一致）
@@ -102,8 +99,9 @@ class NewModel(LabelStudioMLBase):
     """Label Studio ML Backend：对任务文本做规则 + 库校验式 NER 预标注。"""
 
     def setup(self) -> None:
-        """启动时写入模型版本号（供 LS 侧区分预测来源）。"""
+        """启动时写入模型版本号，并预加载快递 AC 自动机到内存。"""
         self.set("model_version", "0.0.1")
+        self.set("express_automaton", get_express_automaton(force_reload=True))
 
     def predict(
         self,
@@ -135,25 +133,12 @@ class NewModel(LabelStudioMLBase):
                 text = str(text) if text is not None else ""
             task_texts.append(text)
 
-        # 快递面单：优先 Doris 全量字典 + AC；否则「正文候选 + Doris IN」
-        force_ac = os.environ.get("EXPRESS_AC_FORCE_RELOAD", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        auto = get_express_automaton(force_reload=force_ac)
-        if auto is not None:
-            logger.info("[predict] 快递面单: AC 模式, tasks=%d", len(task_texts))
-            express_spans_by_task = [iter_express_matches(t, auto) for t in task_texts]
+        auto = self.get("express_automaton")
+        if auto is None:
+            logger.warning("[predict] 快递面单: AC 未初始化，返回空结果, tasks=%d", len(task_texts))
         else:
-            logger.info("[predict] 快递面单: 回退 Doris IN, tasks=%d", len(task_texts))
-            per_task_cands = [extract_express_candidates(t) for t in task_texts]
-            all_nums = [x for c in per_task_cands for _, __, x in c]
-            found_express = lookup_express_numbers(all_nums)
-            express_spans_by_task = [
-                [(s, e, x) for s, e, x in c if x in found_express]
-                for c in per_task_cands
-            ]
+            logger.info("[predict] 快递面单: AC 模式, tasks=%d", len(task_texts))
+        express_spans_by_task = [iter_express_matches(t, auto) for t in task_texts]
 
         for text, express_spans in zip(task_texts, express_spans_by_task):
             result: List[Dict[str, Any]] = []
@@ -199,27 +184,3 @@ class NewModel(LabelStudioMLBase):
             )
 
         return ModelResponse(predictions=predictions, model_version=model_version)
-
-    # def fit(self, event, data, **kwargs):
-    #     """
-    #     This method is called each time an annotation is created or updated
-    #     You can run your logic here to update the model and persist it to the cache
-    #     It is not recommended to perform long-running operations here, as it will block the main thread
-    #     Instead, consider running a separate process or a thread (like RQ worker) to perform the training
-    #     :param event: event type can be ('ANNOTATION_CREATED', 'ANNOTATION_UPDATED', 'START_TRAINING')
-    #     :param data: the payload received from the event (check [Webhook event reference](https://labelstud.io/guide/webhook_reference.html))
-    #     """
-    #
-    #     # use cache to retrieve the data from the previous fit() runs
-    #     old_data = self.get('my_data')
-    #     old_model_version = self.get('model_version')
-    #     print(f'Old data: {old_data}')
-    #     print(f'Old model version: {old_model_version}')
-    #
-    #     # store new data to the cache
-    #     self.set('my_data', 'my_new_data_value')
-    #     self.set('model_version', 'my_new_model_version')
-    #     print(f'New data: {self.get("my_data")}')
-    #     print(f'New model version: {self.get("model_version")}')
-    #
-    #     print('fit() completed successfully.')
