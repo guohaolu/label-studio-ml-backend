@@ -83,12 +83,32 @@ def extract_prefix(tracking_number: str) -> str:
     return m.group(0) if m else ""
 
 
+def numeric_prefix_candidates(tracking_number: str, max_len: int = 3) -> List[str]:
+    """为纯数字单号生成若干个候选前缀。
+
+    为什么这样做：
+    - 有些公司规则是 1 位数字开头（例如 9 开头）
+    - 有些是 2 位数字开头（例如 77、55）
+    - 少量场景可能需要 3 位前缀
+
+    示例：
+    - `771234567890123` -> `['7', '77', '771']`
+    - `031234567890123` -> `['0', '03', '031']`
+    """
+    text = normalize_tracking_number(tracking_number)
+    if not text.isdigit():
+        return []
+    limit = min(max_len, len(text))
+    return [text[:i] for i in range(1, limit + 1)]
+
+
 def shape_of(text: str) -> str:
     """把字符串归一化成结构形状串。
 
     例如：
     - `SF1234567890` -> `AA9999999999`
     - `ZTO-123456` -> `AAA-999999`
+    - `1234567890` -> `9999999999`
     """
     text = normalize_tracking_number(text)
     out: List[str] = []
@@ -116,16 +136,20 @@ def normalize_pattern(tracking_number: str) -> str:
     - `SF1234567890` -> `SF<NUM:10>`
     - `ZTO123456789012` -> `ZTO<NUM:12>`
     - `JDAB123456` -> `JDAB<AA999999>`
+    - `1234567890` -> `1234567890<NUM:10>`
     """
     text = normalize_tracking_number(tracking_number)
     prefix, body = split_prefix_and_body(text)
     if not prefix:
-        return shape_of(text)
+        return f"<NUM:{len(text)}>" if text.isdigit() else shape_of(text)
 
     digit_count = sum(1 for ch in body if ch.isdigit())
     alpha_count = sum(1 for ch in body if ch.isalpha())
 
-    if body and alpha_count == 0 and digit_count > 0:
+    if not body:
+        return shape_of(text)
+
+    if alpha_count == 0 and digit_count > 0:
         return f"{prefix}<NUM:{digit_count}>"
     return f"{prefix}<{shape_of(body)}>"
 
@@ -133,12 +157,25 @@ def normalize_pattern(tracking_number: str) -> str:
 def mine_express_prefixes(
     rows: Sequence[ExpressSample | Dict[str, Any]],
     min_count: int = 5,
+    numeric_max_len: int = 3,
+    numeric_stability_ratio: float = 0.75,
 ) -> Dict[str, Any]:
     """从历史样本里挖掘高频前缀和模式。
+
+    支持两类前缀：
+    - 字母前缀：例如 `SF`、`YT`、`DPT`
+    - 数字前缀：例如 `77`、`55`、`03`
+
+    其中数字前缀会通过“频次 + 稳定性”筛噪：
+    - `min_count` 控制最基本的出现次数
+    - `numeric_stability_ratio` 控制数字前缀相对更短前缀的稳定性
+      例如 `77` 只有在它相对 `7` 不是明显噪声时才保留
 
     参数：
     - `rows`: 样本列表，每条至少包含 `tracking_number` 和 `company_code`
     - `min_count`: 最小出现次数，低于该阈值的前缀/模式会被过滤
+    - `numeric_max_len`: 数字前缀最多挖掘几位
+    - `numeric_stability_ratio`: 数字前缀稳定性阈值，越大越严格
 
     返回值：
     - `company_prefix_counter`: 公司编码 -> 前缀计数器
@@ -172,36 +209,60 @@ def mine_express_prefixes(
             invalid += 1
             continue
 
-        # 只保留字母数字主体，避免明显脏数据干扰统计。
         if not _ALNUM_RE.search(tracking_number):
             invalid += 1
             continue
 
-        prefix = extract_prefix(tracking_number)
-        pattern = normalize_pattern(tracking_number)
-
         total += 1
-        if prefix:
-            prefix_counter[prefix] += 1
-            prefix_length_counter[prefix][len(tracking_number)] += 1
-            if company_code:
-                company_prefix_counter[company_code][prefix] += 1
-
+        pattern = normalize_pattern(tracking_number)
         pattern_counter[pattern] += 1
         if company_code:
             company_pattern_counter[company_code][pattern] += 1
 
-    top_prefixes = [p for p, c in prefix_counter.items() if c >= min_count]
-    top_patterns = [p for p, c in pattern_counter.items() if c >= min_count]
+        alpha_prefix = extract_prefix(tracking_number)
+        if alpha_prefix:
+            prefix_counter[alpha_prefix] += 1
+            prefix_length_counter[alpha_prefix][len(tracking_number)] += 1
+            if company_code:
+                company_prefix_counter[company_code][alpha_prefix] += 1
+            continue
 
-    # 公司编码 -> 高频前缀
+        if tracking_number.isdigit():
+            numeric_candidates = numeric_prefix_candidates(tracking_number, max_len=numeric_max_len)
+            # 纯数字单号会同时贡献多个候选前缀，后面再用频次和稳定性做筛选。
+            for candidate in numeric_candidates:
+                prefix_counter[candidate] += 1
+                prefix_length_counter[candidate][len(tracking_number)] += 1
+                if company_code:
+                    company_prefix_counter[company_code][candidate] += 1
+
+    def _stable_numeric_prefix(prefix: str) -> bool:
+        if not prefix or not prefix.isdigit() or len(prefix) == 1:
+            return True
+        parent = prefix[:-1]
+        parent_count = prefix_counter.get(parent, 0)
+        if parent_count == 0:
+            return True
+        return (prefix_counter[prefix] / parent_count) >= numeric_stability_ratio
+
+    top_prefixes = [
+        p
+        for p, c in prefix_counter.items()
+        if c >= min_count and (not p.isdigit() or _stable_numeric_prefix(p))
+    ]
+    top_prefixes.sort(key=lambda p: (-prefix_counter[p], -len(p), p))
+
+    top_patterns = [p for p, c in pattern_counter.items() if c >= min_count]
+    top_patterns.sort(key=lambda p: (-pattern_counter[p], p))
+
     company_top_prefixes: Dict[str, List[Dict[str, Any]]] = {}
     for company_code, counter in company_prefix_counter.items():
-        company_top_prefixes[company_code] = [
+        items = [
             {"prefix": prefix, "count": count}
             for prefix, count in counter.most_common()
-            if count >= min_count
+            if count >= min_count and (not prefix.isdigit() or _stable_numeric_prefix(prefix))
         ]
+        company_top_prefixes[company_code] = items
 
     company_top_patterns: Dict[str, List[Dict[str, Any]]] = {}
     for company_code, counter in company_pattern_counter.items():
