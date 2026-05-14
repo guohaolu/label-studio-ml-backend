@@ -78,17 +78,17 @@ class NewModel(LabelStudioMLBase):
     def setup(self) -> None:
         logger.info("[setup] 开始初始化 AC 自动机与字典")
         self.set("model_version", "0.0.3")
-        self.set("express_automaton", get_express_automaton(force_reload=True))
+        self.express_automaton = get_express_automaton(force_reload=True)
 
         buyer_words = fetch_buyer_nickname_dictionary()
         logger.info("[setup] 买家昵称字典加载条数=%d", len(buyer_words))
         if buyer_words:
             logger.debug("[setup] 买家昵称样例=%s", buyer_words[:5])
-        self.set("buyer_nickname_automaton", build_automaton(buyer_words))
+        self.buyer_nickname_automaton = build_automaton(buyer_words)
         logger.info(
             "[setup] 完成初始化，express_auto=%s, buyer_auto=%s",
-            self.get("express_automaton") is not None,
-            self.get("buyer_nickname_automaton") is not None,
+            self.express_automaton is not None,
+            self.buyer_nickname_automaton is not None,
         )
 
     def predict(
@@ -105,8 +105,8 @@ class NewModel(LabelStudioMLBase):
             from_name, to_name, value_key = "label", "text", "text"
 
         model_version = self.get("model_version")
-        express_auto = self.get("express_automaton")
-        buyer_auto = self.get("buyer_nickname_automaton")
+        express_auto = getattr(self, "express_automaton", None)
+        buyer_auto = getattr(self, "buyer_nickname_automaton", None)
 
         logger.info(
             "[predict] tasks=%d, express_auto=%s, buyer_auto=%s",

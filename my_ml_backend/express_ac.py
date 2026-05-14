@@ -98,6 +98,17 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         logger.warning("%s 连接 Doris 失败: %s", log_prefix, e, exc_info=True)
         return []
 
+    logger.info(
+        "%s 准备执行 Doris SQL, table=%s, field=%s, min_len=%s, max_len=%s, limit=%s",
+        log_prefix,
+        table_sql,
+        field_name,
+        min_len,
+        max_len,
+        limit,
+    )
+    logger.debug("%s Doris SQL: %s", log_prefix, sql)
+
     try:
         with conn.cursor() as cur:
             cur.execute(sql, (min_len, max_len))
