@@ -41,14 +41,14 @@ def _coerce_string(raw: object) -> str:
 
 def _build_sql(field_name: str, table_sql: str, updated_at_field: str, updated_since: str, limit: int) -> str:
     # 直接拼 SQL，便于日志排查和肉眼确认最终查询条件。
+    # Doris 对 DISTINCT + ORDER BY 非聚合字段会报“should be grouped by”，因此这里只保留筛选条件。
     field_expr = f"TRIM(CAST(`{field_name}` AS CHAR))"
     sql = (
         f"SELECT DISTINCT {field_expr} AS n "
         f"FROM {table_sql} "
         f"WHERE `{updated_at_field}` >= '{updated_since}' "
         f"AND CHAR_LENGTH({field_expr}) BETWEEN %s AND %s "
-        f"AND {field_expr} != '' "
-        f"ORDER BY `{updated_at_field}` DESC"
+        f"AND {field_expr} != ''"
     )
     if limit > 0:
         sql += f" LIMIT {int(limit)}"
