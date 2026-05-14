@@ -1,4 +1,4 @@
-"""从文本提取快递单号候选，并在 Doris 中按 expressNumber 校验。"""
+"""从文本提取业务标签候选，并在 Doris 中做存在性校验。"""
 from __future__ import annotations
 
 import logging

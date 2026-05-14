@@ -1,4 +1,4 @@
-"""从 Doris 拉取快递单号字典，构建 Aho-Corasick 在正文中做子串匹配。"""
+"""从 Doris 拉取字典，构建 Aho-Corasick 在正文中做子串匹配。"""
 from __future__ import annotations
 
 import logging
@@ -17,7 +17,7 @@ try:
 except ImportError:  # pragma: no cover
     ahocorasick = None
 
-from express_doris import _qualified_table_sql, express_number_norm_sql
+from express_doris import _qualified_table_sql
 
 _automaton = None  # type: ignore[var-annotated]
 _last_success_monotonic = 0.0
@@ -25,8 +25,7 @@ _last_attempt_monotonic = 0.0
 _load_lock = threading.Lock()
 
 
-def _coerce_waybill_string(raw: object) -> str:
-    """Doris/pymysql 可能给出 Decimal；转成与正文一致的数字串，去掉无意义的 .0。"""
+def _coerce_string(raw: object) -> str:
     if raw is None:
         return ""
     if isinstance(raw, Decimal):
@@ -39,26 +38,23 @@ def _coerce_waybill_string(raw: object) -> str:
     return s
 
 
-def fetch_express_dictionary() -> List[str]:
-    """
-    拉取 DISTINCT 主单号；与 lookup_express_numbers 使用同一套 SQL 归一化。
-    expressNumber 为数值型时，避免对裸列用 LENGTH() 导致 Doris 侧异常或筛空。
-    """
+def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[str]:
     host = os.environ.get("DORIS_HOST", "").strip()
     if not host:
-        logger.warning("[express_ac] 未设置 DORIS_HOST，无法加载 AC 字典")
+        logger.warning("%s 未设置 DORIS_HOST，无法加载 AC 字典", log_prefix)
         return []
 
-    table_sql = _qualified_table_sql()
+    table_sql = _qualified_table_sql(env_table)
     if not table_sql:
-        logger.warning("[express_ac] 表名解析失败，检查 DORIS_DATABASE / DORIS_EXPRESS_TABLE")
+        logger.warning("%s 表名解析失败，检查 DORIS_DATABASE / %s", log_prefix, env_table)
         return []
 
     try:
         import pymysql
     except ImportError:
         logger.warning(
-            "[express_ac] 未安装 pymysql。Python=%s 请执行: %s -m pip install pymysql",
+            "%s 未安装 pymysql。Python=%s 请执行: %s -m pip install pymysql",
+            log_prefix,
             sys.executable,
             sys.executable,
         )
@@ -69,23 +65,21 @@ def fetch_express_dictionary() -> List[str]:
     password = os.environ.get("DORIS_PASSWORD", "")
     session_db = os.environ.get("DORIS_SESSION_DATABASE", "").strip()
 
-    norm = express_number_norm_sql()
-    min_len = int(os.environ.get("EXPRESS_AC_MIN_LEN", "8"))
+    min_len = int(os.environ.get("EXPRESS_AC_MIN_LEN", "1"))
     max_len = int(os.environ.get("EXPRESS_AC_MAX_LEN", "64"))
     limit = int(os.environ.get("EXPRESS_AC_LOAD_LIMIT", "0"))
+    fetch = int(os.environ.get("EXPRESS_AC_FETCH_SIZE", "10000"))
 
-    inner = f"SELECT {norm} AS n FROM {table_sql}"
     sql = (
-        "SELECT DISTINCT TRIM(t.n) AS n FROM ("
-        + inner
-        + ") t WHERE CHAR_LENGTH(TRIM(t.n)) BETWEEN %s AND %s AND TRIM(t.n) != ''"
+        f"SELECT DISTINCT TRIM(CAST(`{field_name}` AS CHAR)) AS n FROM {table_sql} "
+        "WHERE CHAR_LENGTH(TRIM(CAST(`{field_name}` AS CHAR))) BETWEEN %s AND %s "
+        "AND TRIM(CAST(`{field_name}` AS CHAR)) != ''"
     )
     if limit > 0:
         sql += f" LIMIT {int(limit)}"
 
     out: List[str] = []
     seen: Set[str] = set()
-    fetch = int(os.environ.get("EXPRESS_AC_FETCH_SIZE", "10000"))
 
     conn = None
     try:
@@ -100,7 +94,7 @@ def fetch_express_dictionary() -> List[str]:
             read_timeout=int(os.environ.get("DORIS_READ_TIMEOUT", "120")),
         )
     except Exception as e:
-        logger.warning("[express_ac] 连接 Doris 失败: %s", e, exc_info=True)
+        logger.warning("%s 连接 Doris 失败: %s", log_prefix, e, exc_info=True)
         return []
 
     try:
@@ -111,13 +105,13 @@ def fetch_express_dictionary() -> List[str]:
                 if not rows:
                     break
                 for row in rows:
-                    s = _coerce_waybill_string(row[0] if row else None)
+                    s = _coerce_string(row[0] if row else None)
                     if len(s) < min_len or not s or s in seen:
                         continue
                     seen.add(s)
                     out.append(s)
     except Exception as e:
-        logger.warning("[express_ac] 字典 SQL 失败: %s", e, exc_info=True)
+        logger.warning("%s 字典 SQL 失败: %s", log_prefix, e, exc_info=True)
         return []
     finally:
         if conn is not None:
@@ -125,22 +119,24 @@ def fetch_express_dictionary() -> List[str]:
 
     if not out:
         logger.warning(
-            "[express_ac] 字典为 0 条（检查表数据、CHAR_LENGTH 范围 %s~%s、库名是否正确）",
+            "%s 字典为 0 条（检查表数据、CHAR_LENGTH 范围 %s~%s、库名是否正确）",
+            log_prefix,
             min_len,
             max_len,
         )
     else:
-        logger.info("[express_ac] 字典加载 %d 条", len(out))
-        if os.environ.get("EXPRESS_AC_DEBUG", "").strip().lower() in ("1", "true", "yes"):
-            hit = "92928429344"
-            logger.info(
-                "[express_ac] 样例: 前3条=%s；含 %s ? %s",
-                out[:3],
-                hit,
-                any(x == hit for x in out),
-            )
-
+        logger.info("%s 字典加载 %d 条", log_prefix, len(out))
     return out
+
+
+def fetch_express_dictionary() -> List[str]:
+    return _fetch_dictionary("expressNumber", "DORIS_EXPRESS_TABLE", "[express_ac]")
+
+
+def fetch_buyer_nickname_dictionary() -> List[str]:
+    return _fetch_dictionary(
+        "buyersNickname", "DORIS_BUYER_NICKNAME_TABLE", "[buyer_nickname_ac]"
+    )
 
 
 def build_automaton(words: List[str]):
@@ -148,9 +144,8 @@ def build_automaton(words: List[str]):
         return None
     auto = ahocorasick.Automaton()
     for w in words:
-        if not w:
-            continue
-        auto.add_word(w, w)
+        if w:
+            auto.add_word(w, w)
     auto.make_automaton()
     return auto
 
@@ -173,7 +168,7 @@ def _resolve_spans(matches: List[Tuple[int, int, str]]) -> List[Tuple[int, int, 
     return sorted(kept, key=lambda x: (x[0], x[1]))
 
 
-def iter_express_matches(text: str, auto) -> List[Tuple[int, int, str]]:
+def iter_matches(text: str, auto) -> List[Tuple[int, int, str]]:
     if not text or auto is None:
         return []
     raw: List[Tuple[int, int, str]] = []
@@ -227,47 +222,13 @@ def get_express_automaton(force_reload: bool = False):
 if __name__ == "__main__":
     import argparse
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s:%(name)s:%(message)s",
-    )
-    parser = argparse.ArgumentParser(description="快递 AC 字典自检")
-    parser.add_argument(
-        "--offline",
-        action="store_true",
-        help="不连 Doris，仅用内置样例单号验证 AC 与文本匹配",
-    )
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+    parser = argparse.ArgumentParser(description="AC 字典自检")
+    parser.add_argument("--offline", action="store_true", help="离线样例验证")
     args = parser.parse_args()
 
-    text = (
-        "AAGU5t2oAJmLtqP7Ur1R5bv9 河南 在途 客户想要这个椅子周六派送 "
-        "辛苦核实下物流时间给客户对接预约下 百世快运 92928429344"
-    )
-
+    text = "买家昵称 张三丰，快递单号 92928429344"
     if args.offline:
-        if ahocorasick is None:
-            print("请先安装: pip install pyahocorasick")
-            raise SystemExit(1)
-        demo = build_automaton(["92928429344"])
+        demo = build_automaton(["张三丰"])
         print("offline AC built:", demo is not None)
-        print("matches:", iter_express_matches(text, demo))
-        raise SystemExit(0)
-
-    if not os.environ.get("DORIS_HOST", "").strip():
-        print(
-            "未设置 DORIS_HOST，无法从 Doris 拉字典。\n"
-            "  PowerShell 示例：\n"
-            '    $env:DORIS_HOST="你的FE地址"\n'
-            '    $env:DORIS_PORT="9030"\n'
-            '    $env:DORIS_USER="..."\n'
-            '    $env:DORIS_PASSWORD="..."\n'
-            '    $env:DORIS_SESSION_DATABASE="你的库名"   # 或 DORIS_DATABASE + 表名\n'
-            "  然后： python express_ac.py\n"
-            "  或先做离线验证（不连库）： python express_ac.py --offline"
-        )
-        raise SystemExit(1)
-
-    a = get_express_automaton(force_reload=True)
-    print("AC built:", a is not None)
-    if a is not None:
-        print("matches:", iter_express_matches(text, a))
+        print("matches:", iter_matches(text, demo))
