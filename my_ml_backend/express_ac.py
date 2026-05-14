@@ -70,10 +70,11 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
     limit = int(os.environ.get("EXPRESS_AC_LOAD_LIMIT", "0"))
     fetch = int(os.environ.get("EXPRESS_AC_FETCH_SIZE", "10000"))
 
+    field_expr = f"TRIM(CAST(`{field_name}` AS CHAR))"
     sql = (
-        f"SELECT DISTINCT TRIM(CAST(`{field_name}` AS CHAR)) AS n FROM {table_sql} "
-        "WHERE CHAR_LENGTH(TRIM(CAST(`{field_name}` AS CHAR))) BETWEEN %s AND %s "
-        "AND TRIM(CAST(`{field_name}` AS CHAR)) != ''"
+        f"SELECT DISTINCT {field_expr} AS n FROM {table_sql} "
+        f"WHERE CHAR_LENGTH({field_expr}) BETWEEN %s AND %s "
+        f"AND {field_expr} != ''"
     )
     if limit > 0:
         sql += f" LIMIT {int(limit)}"

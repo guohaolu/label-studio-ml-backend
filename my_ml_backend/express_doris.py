@@ -100,12 +100,13 @@ def extract_express_candidates(text: str) -> List[Tuple[int, int, str]]:
     return out
 
 
-def _qualified_table_sql() -> str | None:
+def _qualified_table_sql(env_table: str) -> str | None:
     """返回 `db`.`table` 或 `table`，非法则 None。"""
     db = os.environ.get("DORIS_DATABASE", "").strip()
-    tbl = os.environ.get(
-        "DORIS_EXPRESS_TABLE", "furniture_tms_busi__express_detail"
-    ).strip()
+    default_table = "furniture_tms_busi__express_detail"
+    if env_table == "DORIS_BUYER_NICKNAME_TABLE":
+        default_table = "furniture_tms_busi__plan_sheet"
+    tbl = os.environ.get(env_table, default_table).strip()
     if not tbl:
         return None
     if "." in tbl:
@@ -146,7 +147,7 @@ def lookup_express_numbers(numbers: List[str]) -> Set[str]:
         logger.debug("未设置 DORIS_HOST，跳过快递面单库校验")
         return set()
 
-    table_sql = _qualified_table_sql()
+    table_sql = _qualified_table_sql("DORIS_EXPRESS_TABLE")
     if not table_sql:
         return set()
 

@@ -22,7 +22,6 @@ from label_studio_ml.response import ModelResponse, PredictionValue
 from express_ac import (
     build_automaton,
     fetch_buyer_nickname_dictionary,
-    fetch_express_dictionary,
     get_express_automaton,
     iter_matches,
 )
@@ -77,10 +76,20 @@ def _make_label_region(
 
 class NewModel(LabelStudioMLBase):
     def setup(self) -> None:
-        self.set("model_version", "0.0.2")
+        logger.info("[setup] 开始初始化 AC 自动机与字典")
+        self.set("model_version", "0.0.3")
         self.set("express_automaton", get_express_automaton(force_reload=True))
+
         buyer_words = fetch_buyer_nickname_dictionary()
+        logger.info("[setup] 买家昵称字典加载条数=%d", len(buyer_words))
+        if buyer_words:
+            logger.debug("[setup] 买家昵称样例=%s", buyer_words[:5])
         self.set("buyer_nickname_automaton", build_automaton(buyer_words))
+        logger.info(
+            "[setup] 完成初始化，express_auto=%s, buyer_auto=%s",
+            self.get("express_automaton") is not None,
+            self.get("buyer_nickname_automaton") is not None,
+        )
 
     def predict(
         self,
@@ -99,26 +108,59 @@ class NewModel(LabelStudioMLBase):
         express_auto = self.get("express_automaton")
         buyer_auto = self.get("buyer_nickname_automaton")
 
+        logger.info(
+            "[predict] tasks=%d, express_auto=%s, buyer_auto=%s",
+            len(tasks),
+            express_auto is not None,
+            buyer_auto is not None,
+        )
+
         predictions: List[PredictionValue] = []
-        for task in tasks:
+        for idx, task in enumerate(tasks):
             raw = task.get("data", {}).get(value_key, "")
             text = self.preload_task_data(task, raw)
             if not isinstance(text, str):
                 text = str(text) if text is not None else ""
 
+            logger.debug("[predict] task_index=%d text_len=%d", idx, len(text))
+
             result: List[Dict[str, Any]] = []
             for ls_label, pattern, rule_score in _REGEX_TAG_RULES:
-                for start, end in _iter_spans(text, pattern):
-                    result.append(_make_label_region(from_name, to_name, ls_label, text, start, end, rule_score))
+                spans = _iter_spans(text, pattern)
+                if spans:
+                    logger.debug("[predict] task_index=%d regex=%s hit=%d", idx, ls_label, len(spans))
+                for start, end in spans:
+                    result.append(
+                        _make_label_region(from_name, to_name, ls_label, text, start, end, rule_score)
+                    )
 
-            for start, end, _word in iter_matches(text, express_auto):
+            express_spans = list(iter_matches(text, express_auto))
+            if express_spans:
+                logger.debug("[predict] task_index=%d express hit=%d", idx, len(express_spans))
+            for start, end, word in express_spans:
+                logger.debug("[predict] task_index=%d express match=%s idx=%d start=%d end=%d", idx, word, idx, start, end)
                 result.append(_make_label_region(from_name, to_name, _EXPRESS_LS_LABEL, text, start, end, 1.0))
 
-            for start, end, _word in iter_matches(text, buyer_auto):
-                result.append(_make_label_region(from_name, to_name, _BUYER_NICKNAME_LS_LABEL, text, start, end, 1.0))
+            buyer_spans = list(iter_matches(text, buyer_auto))
+            if buyer_spans:
+                logger.debug("[predict] task_index=%d buyer hit=%d", idx, len(buyer_spans))
+            for start, end, word in buyer_spans:
+                logger.debug("[predict] task_index=%d buyer match=%s start=%d end=%d", idx, word, start, end)
+                result.append(
+                    _make_label_region(
+                        from_name,
+                        to_name,
+                        _BUYER_NICKNAME_LS_LABEL,
+                        text,
+                        start,
+                        end,
+                        1.0,
+                    )
+                )
 
             result.sort(key=lambda r: (r["value"]["start"], r["value"]["end"]))
             score = sum(r["score"] for r in result) / len(result) if result else 0.0
+            logger.info("[predict] task_index=%d result_count=%d score=%.4f", idx, len(result), score)
             predictions.append(PredictionValue(result=result, score=score, model_version=model_version))
 
         return ModelResponse(predictions=predictions, model_version=model_version)
