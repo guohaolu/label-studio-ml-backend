@@ -38,6 +38,20 @@ def _coerce_string(raw: object) -> str:
     return s
 
 
+def _build_sql(field_name: str, table_sql: str, updated_at_field: str, updated_since: str, limit: int) -> str:
+    field_expr = f"TRIM(CAST(`{field_name}` AS CHAR))"
+    sql = (
+        f"SELECT DISTINCT {field_expr} AS n "
+        f"FROM {table_sql} "
+        f"WHERE `{updated_at_field}` >= '{updated_since}' "
+        f"AND CHAR_LENGTH({field_expr}) BETWEEN %s AND %s "
+        f"AND {field_expr} != '' "
+    )
+    if limit > 0:
+        sql += f" LIMIT {int(limit)}"
+    return sql
+
+
 def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[str]:
     host = os.environ.get("DORIS_HOST", "").strip()
     if not host:
@@ -76,19 +90,9 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         limit = int(os.environ.get("EXPRESS_AC_LOAD_LIMIT", "0"))
         fetch = int(os.environ.get("EXPRESS_AC_FETCH_SIZE", "10000"))
 
-    field_expr = f"TRIM(CAST(`{field_name}` AS CHAR))"
     updated_at_field = os.environ.get("DORIS_AC_UPDATED_AT_FIELD", "updatedAt").strip()
     updated_since = os.environ.get("DORIS_AC_UPDATED_AT_SINCE", "2025-09-01").strip()
-    order_clause = f" ORDER BY `{updated_at_field}` DESC" if updated_at_field else ""
-
-    sql = (
-        f"SELECT DISTINCT {field_expr} AS n FROM {table_sql} "
-        f"WHERE `{updated_at_field}` >= %s AND CHAR_LENGTH({field_expr}) BETWEEN %s AND %s "
-        f"AND {field_expr} != ''"
-        f"{order_clause}"
-    )
-    if limit > 0:
-        sql += f" LIMIT {int(limit)}"
+    sql = _build_sql(field_name, table_sql, updated_at_field, updated_since, limit)
 
     out: List[str] = []
     seen: Set[str] = set()
@@ -110,10 +114,12 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         return []
 
     logger.info(
-        "%s 准备执行 Doris SQL, table=%s, field=%s, min_len=%s, max_len=%s, limit=%s",
+        "%s 准备执行 Doris SQL, table=%s, field=%s, updated_at_field=%s, updated_since=%s, min_len=%s, max_len=%s, limit=%s",
         log_prefix,
         table_sql,
         field_name,
+        updated_at_field,
+        updated_since,
         min_len,
         max_len,
         limit,
@@ -122,18 +128,7 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
 
     try:
         with conn.cursor() as cur:
-            logger.info(
-                "%s 准备执行 Doris SQL, table=%s, field=%s, updated_at_field=%s, updated_since=%s, min_len=%s, max_len=%s, limit=%s",
-                log_prefix,
-                table_sql,
-                field_name,
-                updated_at_field,
-                updated_since,
-                min_len,
-                max_len,
-                limit,
-            )
-            cur.execute(sql, (updated_since, min_len, max_len))
+            cur.execute(sql, (min_len, max_len))
             while True:
                 rows = cur.fetchmany(fetch)
                 if not rows:
