@@ -109,3 +109,11 @@ def test_iter_buyer_nickname_allows_dictionary_phrase_with_spaces() -> None:
     assert len(spans) == 1
     assert spans[0][0:2] == (3, 9)
     assert spans[0][2] == "ab cnd"
+
+
+def test_sanitize_express_number_strips_non_alnum_except_hyphen() -> None:
+    """与业务侧 pandas 清洗一致：仅保留 0-9a-zA-Z-。"""
+    from express_ac import _sanitize_express_number_for_ac
+
+    assert _sanitize_express_number_for_ac("【S662-1】x") == "S662-1x"
+    assert _sanitize_express_number_for_ac("  92928429344  ") == "92928429344"

@@ -64,6 +64,14 @@ def _coerce_string(raw: object) -> str:
     return s
 
 
+def _sanitize_express_number_for_ac(s: str) -> str:
+    """面单号写入 AC 词典前的去脏：仅保留数字、大小写字母与连字符（与 Doris 拉取后 pandas 清洗规则对齐）。
+
+    原因：库内 ``expressNumber`` 常夹杂标点、空格、备注片段；不清洗会把非面单形态灌进 AC，预标噪声大。
+    """
+    return re.sub(r"[^0-9a-zA-Z-]", "", s)
+
+
 def _build_sql(field_name: str, table_sql: str, updated_at_field: str, updated_since: str, limit: int) -> str:
     # 直接拼 SQL，便于日志排查和肉眼确认最终查询条件。
     # Doris 对 DISTINCT + ORDER BY 非聚合字段会报“should be grouped by”，因此这里只保留筛选条件。
@@ -84,7 +92,10 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
     """从 Doris 拉取一列字符串，作为 AC 自动机的「模式串集合」。
 
     说明：AC 只关心「有哪些子串要在正文中找」；本函数负责连库、长度过滤、增量时间条件、
-    分批 fetch、去重与类型规整（见 ``_coerce_string``）。拉取结果传给 ``build_automaton``。
+    分批 fetch、去重与类型规整（见 ``_coerce_string``）。
+    快递 ``expressNumber`` 在入库列表前会经 ``_sanitize_express_number_for_ac`` 去非 [0-9a-zA-Z-] 字符，
+    再按 ``EXPRESS_AC_CLEANED_MIN_LEN`` / ``EXPRESS_AC_CLEANED_MAX_LEN``（默认 7～30）筛长度。
+    拉取结果传给 ``build_automaton``。
     """
     host = os.environ.get("DORIS_HOST", "").strip()
     if not host:
@@ -124,6 +135,10 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         limit = int(os.environ.get("EXPRESS_AC_LOAD_LIMIT", "0"))
         fetch = int(os.environ.get("EXPRESS_AC_FETCH_SIZE", "10000"))
 
+    is_express_dict = env_table == "DORIS_EXPRESS_TABLE"
+    express_clean_min = int(os.environ.get("EXPRESS_AC_CLEANED_MIN_LEN", "7")) if is_express_dict else 0
+    express_clean_max = int(os.environ.get("EXPRESS_AC_CLEANED_MAX_LEN", "30")) if is_express_dict else 0
+    # 增量拉取所依据的时间列名；表结构若不是 updatedAt，请设环境变量 DORIS_AC_UPDATED_AT_FIELD。
     updated_at_field = os.environ.get("DORIS_AC_UPDATED_AT_FIELD", "updatedAt").strip()
     updated_since = os.environ.get("DORIS_AC_UPDATED_AT_SINCE", "2025-09-01").strip()
     sql = _build_sql(field_name, table_sql, updated_at_field, updated_since, limit)
@@ -160,6 +175,14 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
     )
     logger.debug("%s Doris SQL: %s", log_prefix, sql)
 
+    if is_express_dict:
+        logger.info(
+            "%s 快递面单词典：清洗后仅保留 [0-9a-zA-Z-]，长度要求 %s~%s（可配 EXPRESS_AC_CLEANED_*）",
+            log_prefix,
+            express_clean_min,
+            express_clean_max,
+        )
+
     try:
         with conn.cursor() as cur:
             cur.execute(sql, (min_len, max_len))
@@ -169,8 +192,13 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
                     break
                 for row in rows:
                     s = _coerce_string(row[0] if row else None)
-                    if len(s) < min_len or not s or s in seen:
-                        continue
+                    if is_express_dict:
+                        s = _sanitize_express_number_for_ac(s)
+                        if not s or len(s) < express_clean_min or len(s) > express_clean_max or s in seen:
+                            continue
+                    else:
+                        if len(s) < min_len or not s or s in seen:
+                            continue
                     seen.add(s)
                     out.append(s)
                     if os.environ.get("EXPRESS_AC_DEBUG", "").strip().lower() in ("1", "true", "yes"):
@@ -183,12 +211,20 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
             conn.close()
 
     if not out:
-        logger.warning(
-            "%s 字典为 0 条（检查表数据、CHAR_LENGTH 范围 %s~%s、库名是否正确）",
-            log_prefix,
-            min_len,
-            max_len,
-        )
+        if is_express_dict:
+            logger.warning(
+                "%s 字典为 0 条（检查表数据、库名；快递面单另需清洗后长度在 %s~%s 且仅含 0-9a-zA-Z-）",
+                log_prefix,
+                express_clean_min,
+                express_clean_max,
+            )
+        else:
+            logger.warning(
+                "%s 字典为 0 条（检查表数据、CHAR_LENGTH 范围 %s~%s、库名是否正确）",
+                log_prefix,
+                min_len,
+                max_len,
+            )
     else:
         logger.info("%s 字典加载 %d 条", log_prefix, len(out))
         if os.environ.get("EXPRESS_AC_DEBUG", "").strip().lower() in ("1", "true", "yes"):

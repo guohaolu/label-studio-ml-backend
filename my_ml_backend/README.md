@@ -17,6 +17,22 @@
 | 快递面单 | `_EXPRESS_LS_LABEL` |
 | 买家昵称 | `_BUYER_NICKNAME_LS_LABEL` |
 
+## 快递面单标签
+
+### 匹配策略（逐标签）
+
+- **手段（AC）**：从 Doris 表 ``DORIS_EXPRESS_TABLE``（默认 `furniture_tms_busi__express_detail`）拉取 ``expressNumber`` 建 AC，正文子串命中后经 ``iter_matches`` / ``_resolve_spans`` 输出。
+- **手段（加载清洗）**：每条 ``expressNumber`` 先 ``_coerce_string``（数值/小数等转字符串），再 **去掉除 `0-9`、`a-z`、`A-Z`、`-` 以外的所有字符**（等价于 ``str.replace(r'[^0-9a-zA-Z-]', '', regex=True)``）；仅当清洗后长度在 **[``EXPRESS_AC_CLEANED_MIN_LEN``, ``EXPRESS_AC_CLEANED_MAX_LEN``]**（默认 **7～30**）时才加入 AC 词典。原因：库内面单字段常夹标点、备注，直接灌 AC 噪声大。
+- **Doris 侧粗筛**：SQL 仍用 ``EXPRESS_AC_MIN_LEN`` / ``EXPRESS_AC_MAX_LEN``（默认 1～64）与 ``CHAR_LENGTH`` 限制拉取量；最终入 AC 以清洗后长度为准。
+- **数据来源 / 契约**：``DORIS_EXPRESS_TABLE``、字段 ``expressNumber``；连接变量同 ``express_ac._fetch_dictionary``。
+
+### 环境变量（摘录）
+
+- ``EXPRESS_AC_CLEANED_MIN_LEN`` / ``EXPRESS_AC_CLEANED_MAX_LEN``：清洗后面单号长度闭区间，默认 ``7`` / ``30``。
+- ``DORIS_AC_UPDATED_AT_FIELD``：字典 SQL 里 ``WHERE`` 增量条件的时间列名，默认 ``updatedAt``；表字段名不同须配置。
+- ``DORIS_AC_UPDATED_AT_SINCE``：只拉该日期（含）之后更新的行，默认 ``2025-09-01``。
+- ``EXPRESS_AC_MIN_LEN`` / ``EXPRESS_AC_MAX_LEN`` / ``EXPRESS_AC_LOAD_LIMIT`` / ``EXPRESS_AC_REFRESH_SECS`` 等：见 ``express_ac.py``。
+
 ## 买家昵称标签
 
 ### 匹配策略（逐标签）
