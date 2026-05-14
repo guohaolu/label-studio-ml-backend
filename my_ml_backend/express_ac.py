@@ -116,7 +116,7 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         # 买家昵称字典默认更严格，避免把整张大表直接灌进 AC。
         min_len = int(os.environ.get("DORIS_BUYER_NICKNAME_MIN_LEN", "2"))
         max_len = int(os.environ.get("DORIS_BUYER_NICKNAME_MAX_LEN", "32"))
-        limit = int(os.environ.get("DORIS_BUYER_NICKNAME_LOAD_LIMIT", "200000"))
+        limit = int(os.environ.get("DORIS_BUYER_NICKNAME_LOAD_LIMIT", "0"))
         fetch = int(os.environ.get("DORIS_BUYER_NICKNAME_FETCH_SIZE", "10000"))
     else:
         min_len = int(os.environ.get("EXPRESS_AC_MIN_LEN", "1"))
