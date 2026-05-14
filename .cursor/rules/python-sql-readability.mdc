@@ -1,0 +1,12 @@
+---
+description: Keep backend SQL readable with direct string construction when values are already sanitized or internal config; avoid excessive placeholders that reduce clarity.
+alwaysApply: true
+---
+
+# Python SQL Readability
+
+- Prefer direct SQL string construction when inputs come from internal config, validated identifiers, or fixed defaults.
+- Avoid adding placeholder-heavy SQL when it hurts readability and the values are already controlled.
+- Keep the final SQL easy to inspect in logs.
+- If a query needs parameters for safety, keep only the truly dynamic user-controlled values parameterized.
+- For backend data-loading queries, favor clear `sql = f"..."` construction over deeply nested template fragments.
