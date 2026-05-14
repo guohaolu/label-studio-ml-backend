@@ -19,7 +19,7 @@ from uuid import uuid4
 from label_studio_ml.model import LabelStudioMLBase
 from label_studio_ml.response import ModelResponse, PredictionValue
 
-from express_ac import get_buyer_nickname_automaton, get_express_automaton, iter_matches
+from express_ac import get_buyer_nickname_automaton, get_express_automaton, iter_buyer_nickname_matches, iter_matches
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def _make_label_region(
 class NewModel(LabelStudioMLBase):
     def setup(self) -> None:
         logger.info("[setup] 初始化模型版本与自动机引用")
-        self.set("model_version", "0.0.3")
+        self.set("model_version", "0.0.4")
         self.express_automaton = get_express_automaton(force_reload=False)
         self.buyer_nickname_automaton = get_buyer_nickname_automaton(force_reload=False)
         logger.info(
@@ -131,7 +131,7 @@ class NewModel(LabelStudioMLBase):
                 logger.debug("[predict] task_index=%d express match=%s start=%d end=%d", idx, word, start, end)
                 result.append(_make_label_region(from_name, to_name, _EXPRESS_LS_LABEL, text, start, end, 1.0))
 
-            buyer_spans = list(iter_matches(text, buyer_auto))
+            buyer_spans = list(iter_buyer_nickname_matches(text, buyer_auto))
             if buyer_spans:
                 logger.info("[predict] task_index=%d buyer hit=%d", idx, len(buyer_spans))
             else:

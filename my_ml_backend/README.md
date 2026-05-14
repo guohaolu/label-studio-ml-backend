@@ -19,12 +19,18 @@
 
 ## 买家昵称标签
 
-买家昵称标签使用和快递面单相同的 AC 自动机模式：
+### 匹配策略（逐标签）
 
-- 数据表：`furniture_tms_busi__plan_sheet`
-- 字段：`buyersNickname`
-- 环境变量：
-  - `DORIS_BUYER_NICKNAME_TABLE=furniture_tms_busi__plan_sheet`
-  - `DORIS_DATABASE` 或直接在表名里写库名
+- **手段（AC）**：从 Doris 拉取 `buyersNickname`，构建与快递面单相同的 **Aho-Corasick 自动机**，在正文中做**子串**扫描（`iter_buyer_nickname_matches` 内与 `pyahocorasick` 的 `iter` 一致）。
+- **手段（业务过滤）**：AC 给出的每条命中 ``(start, end)``（``end`` 半开）须满足 **左邻为串首或空白、右邻为串尾或空白**（``str.isspace()``）；用于剔除如原文 ``abcnd``、词典含 ``b`` 时那种**嵌入在无空白连续串内**的误命中；词典中含空格的整词（如 ``ab cnd``）在原文 ``… ab cnd …`` 中仍按**整段子串**命中，只要**外侧**紧贴空白或边界即可。
+- **去重叠**：过滤后仍走 ``_resolve_spans``（长 span 优先、互不重叠贪心），与快递等一致。
+- **关闭边界过滤（调试）**：环境变量 ``BUYER_NICKNAME_WS_BOUNDARY`` 设为 ``0``/``false``/``no`` 时，买家昵称行为与纯 ``iter_matches`` 相同。
+- **数据来源 / 契约**：表名 ``DORIS_BUYER_NICKNAME_TABLE``（如 `furniture_tms_busi__plan_sheet`）、字段 `buyersNickname`；``DORIS_DATABASE`` 或表名中带库名。其它 Doris 相关变量与 `express_ac._fetch_dictionary` 一致。
+- **已知误报**：左右邻接为空白但仍是正常英文词的一部分（如两个词之间恰好只有一个空格）时，短词典仍可能命中；更细粒度需分词或词表。
+- **已知漏报**：中文等**无空白**紧贴场景（如 ``你好张三``）若业务要求标出昵称，当前「外侧须空白」会漏标；与「昵称与周围有空格」的约定一致时可接受。
 
-启动后会从 Doris 拉取 `buyersNickname` 字典，构建 AC 自动机，并在文本中做子串命中。
+### 环境变量（摘录）
+
+- ``BUYER_NICKNAME_USE_AC``：为 ``0``/``false``/``no`` 时关闭买家昵称 AC。
+- ``BUYER_NICKNAME_WS_BOUNDARY``：默认开启空白边界过滤；见上。
+- ``BUYER_NICKNAME_AC_REFRESH_SECS`` / ``BUYER_NICKNAME_AC_EMPTY_RETRY_SECS`` / ``DORIS_BUYER_NICKNAME_*``：见 ``express_ac.py`` 与 Doris 配置说明。

@@ -86,3 +86,26 @@ def test_predict(client):
             txt == "92928429344" and "快递面单" in lbls
             for txt, lbls in labels_spans
         ), "已配置 DORIS_HOST 时，样本文本应命中 92928429344 -> 快递面单"
+
+
+def test_iter_buyer_nickname_rejects_embedded_short_word() -> None:
+    """无空白长串内 AC 子串命中须被空白边界过滤掉。"""
+    pytest.importorskip("ahocorasick")
+    from express_ac import build_automaton, iter_buyer_nickname_matches
+
+    auto = build_automaton(["b", "abc"])
+    assert auto is not None
+    spans = iter_buyer_nickname_matches("abcnd", auto)
+    assert spans == []
+
+
+def test_iter_buyer_nickname_allows_dictionary_phrase_with_spaces() -> None:
+    pytest.importorskip("ahocorasick")
+    from express_ac import build_automaton, iter_buyer_nickname_matches
+
+    auto = build_automaton(["ab cnd"])
+    assert auto is not None
+    spans = iter_buyer_nickname_matches("xx ab cnd yy", auto)
+    assert len(spans) == 1
+    assert spans[0][0:2] == (3, 9)
+    assert spans[0][2] == "ab cnd"

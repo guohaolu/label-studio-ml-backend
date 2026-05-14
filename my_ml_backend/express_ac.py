@@ -2,30 +2,19 @@
 
 本模块在 NER 预标注流程中的角色
 --------------------------------
-`model.py` 在 `predict` 时除正则规则外，还会用本模块构建的两台自动机扫描整条消息：
-1. **快递单号 / 面单号**：字典来自 Doris 的 `expressNumber` 字段（见 `fetch_express_dictionary`）。
-2. **买家昵称**：字典来自 Doris 的 `buyersNickname` 字段（见 `fetch_buyer_nickname_dictionary`）。
+`model.py` 在 `predict` 时除正则规则外，还会用本模块构建的两台 AC 自动机扫描整条消息：
+1. **快递单号 / 面单号**：字典来自 Doris 的 `expressNumber` 字段（见 `fetch_express_dictionary`），命中结果经 ``iter_matches`` 输出。
+2. **买家昵称**：字典来自 Doris 的 `buyersNickname` 字段；同样用 AC 子串扫描，但经 ``iter_buyer_nickname_matches`` 增加**空白边界**过滤（避免无空白长串中的嵌入短词误标），再经 ``_resolve_spans`` 去重叠。
 
-与「暴力对每个词在文本里 find」相比，AC 自动机在一次从左到右扫描文本的过程中，
-同时匹配**词典里所有词**的出现位置，时间复杂度近似 **O(|文本长度| + 命中报告数)**，
-适合词典较大、消息较长的场景。
+与「暴力对每个词在文本里 find」相比，AC 在一次从左到右扫描中同时报告词典中所有子串出现位置，复杂度近似线性于文本长度加命中数；买家昵称在 AC 之后另有业务过滤。
 
-Aho-Corasick 算法（直观理解）
-----------------------------
-1. **Trie（前缀树）**：把所有词典串插入一棵 trie，每条从根到叶的路径对应一个词的前缀。
-2. **失配指针（failure link）**：若在 trie 上沿某字符走时「无路可走」，不回到文本开头重扫，
-   而是跳到「当前已匹配前缀的最长真后缀」且该后缀仍是某个词的前缀的状态；类似 KMP 的 next，
-   但推广到多模式串。
-3. **输出链接**：某个状态可能同时是多个词典串的结尾（例如词典同时含 `he` 与 `she`），
-   需要在到达该状态时输出所有以当前位置结尾的完整词。
-
-本仓库使用第三方库 **pyahocorasick** 完成上述结构；我们只需 `add_word` 插入词典串，
-再调用 `make_automaton()` 编译失配与输出信息，最后用 `iter(text)` 流式扫描文本。
+Aho-Corasick（摘要）
+--------------------
+Trie + 失配链 + 输出链；由 **pyahocorasick** 实现，``add_word`` 后 ``make_automaton()``，再用 ``iter(text)`` 扫描。
 
 与 Label Studio 的衔接
 ----------------------
-`iter_matches` 返回的 `(start, end, word)` 中 `end` 为 **Python 切片右开区间**（即匹配子串为
-`text[start:end]`），供 `model.py` 转成 `HyperTextLabels` 等区域标注。
+``iter_matches`` / ``iter_buyer_nickname_matches`` 返回的 ``(start, end, word)`` 中 ``end`` 为 **Python 切片右开区间**（即匹配子串为 ``text[start:end]``），供 ``model.py`` 转成 `HyperTextLabels` 等区域标注。
 """
 from __future__ import annotations
 
@@ -284,6 +273,57 @@ def _resolve_spans(matches: List[Tuple[int, int, str]]) -> List[Tuple[int, int, 
             continue
         kept.append(m)
     return sorted(kept, key=lambda x: (x[0], x[1]))
+
+
+def _buyer_nickname_whitespace_boundary_ok(text: str, start: int, end: int) -> bool:
+    """判断 AC 命中的 ``text[start:end]`` 是否像「与周围正文用空白隔开的昵称」。
+
+    群聊里匿名买家昵称与前后其它内容之间应有空白（见业务约定）；否则 ``abcnd`` 这类无空白串里
+    被 AC 扫出的单字 ``b`` 不应视为买家昵称。
+
+    规则（``end`` 为半开右界）：
+    - **左界**：``start == 0`` 或 ``text[start - 1]`` 为空白（``str.isspace()``，含空格/制表/换行等）。
+    - **右界**：``end == len(text)`` 或 ``text[end]`` 为空白。
+
+    词典串内部可含空格（如 ``ab cnd``），仅检查 span **外侧**紧邻字符；AC 整段命中后
+    与原文一致，``ab cnd`` 在 ``… xx ab cnd yy …`` 中左右邻接空白则通过。
+    """
+    if start < 0 or end > len(text) or start >= end:
+        return False
+    if start > 0 and not text[start - 1].isspace():
+        return False
+    if end < len(text) and not text[end].isspace():
+        return False
+    return True
+
+
+def iter_buyer_nickname_matches(text: str, auto: Any | None) -> List[Tuple[int, int, str]]:
+    """对买家昵称专用 AC 扫描 ``text``，先做子串命中，再按空白边界过滤，最后 ``_resolve_spans``。
+
+    与 ``iter_matches`` 的差异：快递面单等编码类字段允许紧贴数字字母；买家昵称在 AC 命中后
+    必须满足 ``_buyer_nickname_whitespace_boundary_ok``，避免嵌入在无空白长串中的短词典误标。
+
+    环境变量 ``BUYER_NICKNAME_WS_BOUNDARY`` 为 ``0``/``false``/``no`` 时关闭该过滤（调试用），
+    行为与 ``iter_matches`` 一致。
+    """
+    if not text or auto is None:
+        return []
+    raw: List[Tuple[int, int, str]] = []
+    for end_index, word in auto.iter(text):
+        le = len(word)
+        start = end_index - le + 1
+        if start < 0:
+            continue
+        if text[start : end_index + 1] != word:
+            continue
+        raw.append((start, end_index + 1, word))
+
+    if os.environ.get("BUYER_NICKNAME_WS_BOUNDARY", "1").strip().lower() in ("0", "false", "no"):
+        filtered = raw
+    else:
+        filtered = [t for t in raw if _buyer_nickname_whitespace_boundary_ok(text, t[0], t[1])]
+
+    return _resolve_spans(filtered)
 
 
 def iter_matches(text: str, auto: Any | None) -> List[Tuple[int, int, str]]:
