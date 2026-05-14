@@ -89,6 +89,10 @@ class NewModel(LabelStudioMLBase):
             logger.info("[setup] 买家昵称是否包含目标词=%s target_len=%d", hit, len(target))
         self.buyer_nickname_automaton = build_automaton(buyer_words)
         logger.info(
+            "[setup] 买家昵称 AC 构建完成，自动机=%s",
+            self.buyer_nickname_automaton is not None,
+        )
+        logger.info(
             "[setup] 完成初始化，express_auto=%s, buyer_auto=%s",
             self.express_automaton is not None,
             self.buyer_nickname_automaton is not None,
