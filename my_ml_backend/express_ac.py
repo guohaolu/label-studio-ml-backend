@@ -4,7 +4,7 @@
 --------------------------------
 `model.py` 在 `predict` 时除正则规则外，还会用本模块构建的两台 AC 自动机扫描整条消息：
 1. **快递单号 / 面单号**：字典来自 Doris 的 `expressNumber` 字段（见 `fetch_express_dictionary`），命中结果经 ``iter_matches`` 输出。
-2. **买家昵称**：字典来自 Doris 的 `buyersNickname` 字段；同样用 AC 子串扫描，但经 ``iter_buyer_nickname_matches`` 增加**空白边界**过滤（避免无空白长串中的嵌入短词误标），再经 ``_resolve_spans`` 去重叠。
+2. **买家昵称**：字典来自 Doris 的 `buyerName` 字段；同样用 AC 子串扫描，但经 ``iter_buyer_nickname_matches`` 增加**空白边界**过滤（避免无空白长串中的嵌入短词误标），再经 ``_resolve_spans`` 去重叠。
 
 与「暴力对每个词在文本里 find」相比，AC 在一次从左到右扫描中同时报告词典中所有子串出现位置，复杂度近似线性于文本长度加命中数；买家昵称在 AC 之后另有业务过滤。
 
@@ -238,7 +238,7 @@ def fetch_express_dictionary() -> List[str]:
 
 def fetch_buyer_nickname_dictionary() -> List[str]:
     return _fetch_dictionary(
-        "buyersNickname", "DORIS_BUYER_NICKNAME_TABLE", "[buyer_nickname_ac]"
+        "buyerName", "DORIS_BUYER_NICKNAME_TABLE", "[buyer_nickname_ac]"
     )
 
 
