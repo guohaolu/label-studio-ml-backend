@@ -19,7 +19,8 @@ except ImportError:  # pragma: no cover
 
 from express_doris import _qualified_table_sql
 
-_automaton = None  # type: ignore[var-annotated]
+_express_automaton = None  # type: ignore[var-annotated]
+_buyer_nickname_automaton = None  # type: ignore[var-annotated]
 _last_success_monotonic = 0.0
 _last_attempt_monotonic = 0.0
 _load_lock = threading.Lock()
@@ -47,9 +48,10 @@ def _build_sql(field_name: str, table_sql: str, updated_at_field: str, updated_s
         f"WHERE `{updated_at_field}` >= '{updated_since}' "
         f"AND CHAR_LENGTH({field_expr}) BETWEEN %s AND %s "
         f"AND {field_expr} != '' "
+        f"ORDER BY `{updated_at_field}` DESC"
     )
     if limit > 0:
-        sql += f"LIMIT {int(limit)}"
+        sql += f" LIMIT {int(limit)}"
     return sql
 
 
@@ -92,7 +94,6 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         limit = int(os.environ.get("EXPRESS_AC_LOAD_LIMIT", "0"))
         fetch = int(os.environ.get("EXPRESS_AC_FETCH_SIZE", "10000"))
 
-    # 直接把更新时间条件和排序写进 SQL，便于日志排查，也更容易读懂。
     updated_at_field = os.environ.get("DORIS_AC_UPDATED_AT_FIELD", "updatedAt").strip()
     updated_since = os.environ.get("DORIS_AC_UPDATED_AT_SINCE", "2025-09-01").strip()
     sql = _build_sql(field_name, table_sql, updated_at_field, updated_since, limit)
@@ -220,7 +221,7 @@ def iter_matches(text: str, auto) -> List[Tuple[int, int, str]]:
 
 
 def get_express_automaton(force_reload: bool = False):
-    global _automaton, _last_success_monotonic, _last_attempt_monotonic
+    global _express_automaton, _last_success_monotonic, _last_attempt_monotonic
 
     if ahocorasick is None:
         logger.warning("[express_ac] 未安装 pyahocorasick，跳过 AC")
@@ -234,25 +235,61 @@ def get_express_automaton(force_reload: bool = False):
     now = time.monotonic()
 
     with _load_lock:
-        if not force_reload and refresh > 0 and _automaton is not None:
+        if not force_reload and refresh > 0 and _express_automaton is not None:
             if _last_success_monotonic > 0 and (now - _last_success_monotonic) < refresh:
-                return _automaton
+                return _express_automaton
 
         if (
             not force_reload
             and empty_retry > 0
-            and _automaton is None
+            and _express_automaton is None
             and _last_attempt_monotonic > 0
             and (now - _last_attempt_monotonic) < empty_retry
         ):
             return None
 
         words = fetch_express_dictionary()
-        _automaton = build_automaton(words)
+        _express_automaton = build_automaton(words)
         _last_attempt_monotonic = now
-        if _automaton is not None:
+        if _express_automaton is not None:
             _last_success_monotonic = now
-        return _automaton
+        return _express_automaton
+
+
+def get_buyer_nickname_automaton(force_reload: bool = False):
+    global _buyer_nickname_automaton, _last_success_monotonic, _last_attempt_monotonic
+
+    if ahocorasick is None:
+        logger.warning("[buyer_nickname_ac] 未安装 pyahocorasick，跳过 AC")
+        return None
+
+    if os.environ.get("BUYER_NICKNAME_USE_AC", "1").strip().lower() in ("0", "false", "no"):
+        return None
+
+    refresh = max(0, int(os.environ.get("BUYER_NICKNAME_AC_REFRESH_SECS", "600")))
+    empty_retry = max(0, float(os.environ.get("BUYER_NICKNAME_AC_EMPTY_RETRY_SECS", "45")))
+    now = time.monotonic()
+
+    with _load_lock:
+        if not force_reload and refresh > 0 and _buyer_nickname_automaton is not None:
+            if _last_success_monotonic > 0 and (now - _last_success_monotonic) < refresh:
+                return _buyer_nickname_automaton
+
+        if (
+            not force_reload
+            and empty_retry > 0
+            and _buyer_nickname_automaton is None
+            and _last_attempt_monotonic > 0
+            and (now - _last_attempt_monotonic) < empty_retry
+        ):
+            return None
+
+        words = fetch_buyer_nickname_dictionary()
+        _buyer_nickname_automaton = build_automaton(words)
+        _last_attempt_monotonic = now
+        if _buyer_nickname_automaton is not None:
+            _last_success_monotonic = now
+        return _buyer_nickname_automaton
 
 
 def preload_automata() -> None:
@@ -263,24 +300,7 @@ def preload_automata() -> None:
     except Exception:
         logger.exception("[express_ac] 预热快递面单 AC 失败")
     try:
-        buyer_words = fetch_buyer_nickname_dictionary()
-        logger.info("[express_ac] 买家昵称预热字典条数=%d", len(buyer_words))
-        build_automaton(buyer_words)
+        get_buyer_nickname_automaton(force_reload=True)
     except Exception:
         logger.exception("[express_ac] 预热买家昵称 AC 失败")
     logger.info("[express_ac] AC 自动机预热完成")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-    parser = argparse.ArgumentParser(description="AC 字典自检")
-    parser.add_argument("--offline", action="store_true", help="离线样例验证")
-    args = parser.parse_args()
-
-    text = "买家昵称 张三丰，快递单号 92928429344"
-    if args.offline:
-        demo = build_automaton(["张三丰"])
-        print("offline AC built:", demo is not None)
-        print("matches:", iter_matches(text, demo))

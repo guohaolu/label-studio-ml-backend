@@ -36,6 +36,7 @@ from label_studio_ml.api import init_app
 from express_ac import preload_automata
 from model import NewModel
 
+# 容器导入阶段预热一次，后续模型实例直接复用模块级自动机。
 preload_automata()
 
 

@@ -19,12 +19,7 @@ from uuid import uuid4
 from label_studio_ml.model import LabelStudioMLBase
 from label_studio_ml.response import ModelResponse, PredictionValue
 
-from express_ac import (
-    build_automaton,
-    fetch_buyer_nickname_dictionary,
-    get_express_automaton,
-    iter_matches,
-)
+from express_ac import get_buyer_nickname_automaton, get_express_automaton, iter_matches
 
 logger = logging.getLogger(__name__)
 
@@ -76,24 +71,12 @@ def _make_label_region(
 
 class NewModel(LabelStudioMLBase):
     def setup(self) -> None:
-        logger.info("[setup] 开始初始化 AC 自动机与字典")
+        logger.info("[setup] 初始化模型版本与自动机引用")
         self.set("model_version", "0.0.3")
-        self.express_automaton = get_express_automaton(force_reload=True)
-
-        buyer_words = fetch_buyer_nickname_dictionary()
-        logger.info("[setup] 买家昵称字典加载条数=%d", len(buyer_words))
-        if buyer_words:
-            logger.info("[setup] 买家昵称前5条样例=%s", buyer_words[:5])
-            target = "15782796810-1595&17834749581-8883"
-            hit = any(w == target for w in buyer_words)
-            logger.info("[setup] 买家昵称是否包含目标词=%s target_len=%d", hit, len(target))
-        self.buyer_nickname_automaton = build_automaton(buyer_words)
+        self.express_automaton = get_express_automaton(force_reload=False)
+        self.buyer_nickname_automaton = get_buyer_nickname_automaton(force_reload=False)
         logger.info(
-            "[setup] 买家昵称 AC 构建完成，自动机=%s",
-            self.buyer_nickname_automaton is not None,
-        )
-        logger.info(
-            "[setup] 完成初始化，express_auto=%s, buyer_auto=%s",
+            "[setup] 初始化完成，express_auto=%s, buyer_auto=%s",
             self.express_automaton is not None,
             self.buyer_nickname_automaton is not None,
         )
@@ -145,7 +128,7 @@ class NewModel(LabelStudioMLBase):
             if express_spans:
                 logger.debug("[predict] task_index=%d express hit=%d", idx, len(express_spans))
             for start, end, word in express_spans:
-                logger.debug("[predict] task_index=%d express match=%s idx=%d start=%d end=%d", idx, word, idx, start, end)
+                logger.debug("[predict] task_index=%d express match=%s start=%d end=%d", idx, word, start, end)
                 result.append(_make_label_region(from_name, to_name, _EXPRESS_LS_LABEL, text, start, end, 1.0))
 
             buyer_spans = list(iter_matches(text, buyer_auto))
