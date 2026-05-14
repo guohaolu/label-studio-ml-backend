@@ -39,6 +39,7 @@ def _coerce_string(raw: object) -> str:
 
 
 def _build_sql(field_name: str, table_sql: str, updated_at_field: str, updated_since: str, limit: int) -> str:
+    # 直接拼 SQL，便于日志排查和肉眼确认最终查询条件。
     field_expr = f"TRIM(CAST(`{field_name}` AS CHAR))"
     sql = (
         f"SELECT DISTINCT {field_expr} AS n "
@@ -48,7 +49,7 @@ def _build_sql(field_name: str, table_sql: str, updated_at_field: str, updated_s
         f"AND {field_expr} != '' "
     )
     if limit > 0:
-        sql += f" LIMIT {int(limit)}"
+        sql += f"LIMIT {int(limit)}"
     return sql
 
 
@@ -80,6 +81,7 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
     session_db = os.environ.get("DORIS_SESSION_DATABASE", "").strip()
 
     if env_table == "DORIS_BUYER_NICKNAME_TABLE":
+        # 买家昵称字典默认更严格，避免把整张大表直接灌进 AC。
         min_len = int(os.environ.get("DORIS_BUYER_NICKNAME_MIN_LEN", "2"))
         max_len = int(os.environ.get("DORIS_BUYER_NICKNAME_MAX_LEN", "32"))
         limit = int(os.environ.get("DORIS_BUYER_NICKNAME_LOAD_LIMIT", "200000"))
@@ -90,6 +92,7 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         limit = int(os.environ.get("EXPRESS_AC_LOAD_LIMIT", "0"))
         fetch = int(os.environ.get("EXPRESS_AC_FETCH_SIZE", "10000"))
 
+    # 直接把更新时间条件和排序写进 SQL，便于日志排查，也更容易读懂。
     updated_at_field = os.environ.get("DORIS_AC_UPDATED_AT_FIELD", "updatedAt").strip()
     updated_since = os.environ.get("DORIS_AC_UPDATED_AT_SINCE", "2025-09-01").strip()
     sql = _build_sql(field_name, table_sql, updated_at_field, updated_since, limit)
