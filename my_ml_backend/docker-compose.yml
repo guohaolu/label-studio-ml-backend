@@ -37,8 +37,8 @@ services:
       # 表在库内时填库名；或把 DORIS_EXPRESS_TABLE 设为 db.table
       - DORIS_DATABASE=
       - DORIS_EXPRESS_TABLE=furniture_tms_busi__express_detail
-      # 买家昵称 buyersNickname 建 AC 词典；未设置时代码内默认 delivery_order 表
-      - DORIS_BUYER_NICKNAME_TABLE=furniture_tms_busi__delivery_order
+      # 买家昵称 buyersNickname 建 AC 词典；未设置时代码内默认 trade_order_line_s_o 表
+      - DORIS_BUYER_NICKNAME_TABLE=furniture_trade__trade_order_line_s_o
       # 连接后默认 USE 的数据库（可选，与 DORIS_DATABASE 二选一或同时配置）
       - DORIS_SESSION_DATABASE=
       # 快递面单：全量拉 expressNumber 建 AC（秒）；0=每次 predict 都重拉（慎用）
