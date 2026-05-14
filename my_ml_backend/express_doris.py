@@ -105,7 +105,8 @@ def _qualified_table_sql(env_table: str) -> str | None:
     db = os.environ.get("DORIS_DATABASE", "").strip()
     default_table = "furniture_tms_busi__express_detail"
     if env_table == "DORIS_BUYER_NICKNAME_TABLE":
-        default_table = "furniture_tms_busi__plan_sheet"
+        # 买家昵称 buyersNickname：默认走配送单表（与面单明细表区分）。
+        default_table = "furniture_tms_busi__delivery_order"
     tbl = os.environ.get(env_table, default_table).strip()
     if not tbl:
         return None
