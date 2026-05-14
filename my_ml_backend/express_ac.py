@@ -257,6 +257,22 @@ def get_express_automaton(force_reload: bool = False):
         return _automaton
 
 
+def preload_automata() -> None:
+    """容器启动时预热 AC 自动机，避免首个请求阻塞。"""
+    logger.info("[express_ac] 开始预热 AC 自动机")
+    try:
+        get_express_automaton(force_reload=True)
+    except Exception:
+        logger.exception("[express_ac] 预热快递面单 AC 失败")
+    try:
+        buyer_words = fetch_buyer_nickname_dictionary()
+        logger.info("[express_ac] 买家昵称预热字典条数=%d", len(buyer_words))
+        build_automaton(buyer_words)
+    except Exception:
+        logger.exception("[express_ac] 预热买家昵称 AC 失败")
+    logger.info("[express_ac] AC 自动机预热完成")
+
+
 if __name__ == "__main__":
     import argparse
 
