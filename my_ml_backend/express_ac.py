@@ -111,6 +111,15 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
 
     try:
         with conn.cursor() as cur:
+            logger.info(
+                "%s 准备执行 Doris SQL, table=%s, field=%s, min_len=%s, max_len=%s, limit=%s",
+                log_prefix,
+                table_sql,
+                field_name,
+                min_len,
+                max_len,
+                limit,
+            )
             cur.execute(sql, (min_len, max_len))
             while True:
                 rows = cur.fetchmany(fetch)
@@ -122,6 +131,8 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
                         continue
                     seen.add(s)
                     out.append(s)
+                    if os.environ.get("EXPRESS_AC_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+                        logger.info("%s 样例词: %r len=%d", log_prefix, s, len(s))
     except Exception as e:
         logger.warning("%s 字典 SQL 失败: %s", log_prefix, e, exc_info=True)
         return []
@@ -138,6 +149,8 @@ def _fetch_dictionary(field_name: str, env_table: str, log_prefix: str) -> List[
         )
     else:
         logger.info("%s 字典加载 %d 条", log_prefix, len(out))
+        if os.environ.get("EXPRESS_AC_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            logger.info("%s 前5条样例=%s", log_prefix, out[:5])
     return out
 
 

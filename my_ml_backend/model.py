@@ -83,7 +83,10 @@ class NewModel(LabelStudioMLBase):
         buyer_words = fetch_buyer_nickname_dictionary()
         logger.info("[setup] 买家昵称字典加载条数=%d", len(buyer_words))
         if buyer_words:
-            logger.debug("[setup] 买家昵称样例=%s", buyer_words[:5])
+            logger.info("[setup] 买家昵称前5条样例=%s", buyer_words[:5])
+            target = "15782796810-1595&17834749581-8883"
+            hit = any(w == target for w in buyer_words)
+            logger.info("[setup] 买家昵称是否包含目标词=%s target_len=%d", hit, len(target))
         self.buyer_nickname_automaton = build_automaton(buyer_words)
         logger.info(
             "[setup] 完成初始化，express_auto=%s, buyer_auto=%s",
@@ -143,9 +146,11 @@ class NewModel(LabelStudioMLBase):
 
             buyer_spans = list(iter_matches(text, buyer_auto))
             if buyer_spans:
-                logger.debug("[predict] task_index=%d buyer hit=%d", idx, len(buyer_spans))
+                logger.info("[predict] task_index=%d buyer hit=%d", idx, len(buyer_spans))
+            else:
+                logger.info("[predict] task_index=%d buyer hit=0 text_preview=%r", idx, text[:120])
             for start, end, word in buyer_spans:
-                logger.debug("[predict] task_index=%d buyer match=%s start=%d end=%d", idx, word, start, end)
+                logger.info("[predict] task_index=%d buyer match=%r start=%d end=%d", idx, word, start, end)
                 result.append(
                     _make_label_region(
                         from_name,
