@@ -51,6 +51,26 @@ _last_attempt_monotonic: float = 0.0
 _load_lock = threading.Lock()
 
 
+def _parse_ac_refresh_secs(env_name: str, default: int = 600) -> int:
+    """解析 ``*_AC_REFRESH_SECS``：正数为 TTL 秒；0 表示每次调用都尝试重载；负数为「成功后永不因 TTL 重建」。
+
+    原因：``/predict`` 每请求会新建模型并调 ``setup()``，进而反复调用 ``get_*_automaton``；
+    正数 TTL 到期后下一次请求会再打 Doris 并 ``make_automaton``。运维若需固定词典、避免周期性构建，
+    可设 ``-1``（或 ``never`` / ``off``，大小写不敏感）。
+    """
+    raw = os.environ.get(env_name, str(default)).strip()
+    if not raw:
+        return default
+    lowered = raw.lower()
+    if lowered in ("never", "off", "disable", "none"):
+        return -1
+    try:
+        return int(raw, 10)
+    except ValueError:
+        logger.warning("%s 无效（非整数）：%s=%r，使用默认 %s", env_name, env_name, raw, default)
+        return default
+
+
 def _coerce_string(raw: object) -> str:
     if raw is None:
         return ""
@@ -407,6 +427,8 @@ def get_express_automaton(force_reload: bool = False) -> Any | None:
     - ``EXPRESS_USE_AC``：若为 ``0``/``false``/``no``，直接返回 ``None``，上层仅用其它规则。
     - ``EXPRESS_AC_REFRESH_SECS``（默认 600）：成功构建后，在这么多秒内**不重复**拉 Doris、
       不重建自动机（除非 ``force_reload=True``）。0 表示每次调用都尝试刷新（慎用）。
+      设为 **负数** 或 ``never``/``off``/``disable``/``none``：首次成功后**不再**因 TTL 触发重建，
+      仅进程重启或 ``force_reload=True``（如 ``preload_automata``）会重新拉取。
     - ``EXPRESS_AC_EMPTY_RETRY_SECS``（默认 45）：若上次加载后自动机为 ``None``（词典空或
       构建失败），在这么多秒内**不再打 Doris**，避免故障时每个请求都触发重试风暴。
 
@@ -424,14 +446,16 @@ def get_express_automaton(force_reload: bool = False) -> Any | None:
     if os.environ.get("EXPRESS_USE_AC", "1").strip().lower() in ("0", "false", "no"):
         return None
 
-    refresh = max(0, int(os.environ.get("EXPRESS_AC_REFRESH_SECS", "600")))
+    refresh = _parse_ac_refresh_secs("EXPRESS_AC_REFRESH_SECS", 600)
     empty_retry = max(0, float(os.environ.get("EXPRESS_AC_EMPTY_RETRY_SECS", "45")))
     now = time.monotonic()
 
     with _load_lock:
         # 命中缓存窗口：已有自动机且未过期，直接返回（热路径）。
-        if not force_reload and refresh > 0 and _express_automaton is not None:
-            if _last_success_monotonic > 0 and (now - _last_success_monotonic) < refresh:
+        if not force_reload and _express_automaton is not None:
+            if refresh < 0:
+                return _express_automaton
+            if refresh > 0 and _last_success_monotonic > 0 and (now - _last_success_monotonic) < refresh:
                 return _express_automaton
 
         # 空结果退避：上次没建成机子，短时间内不再访问 Doris。
@@ -457,6 +481,7 @@ def get_buyer_nickname_automaton(force_reload: bool = False) -> Any | None:
 
     与 ``get_express_automaton`` 对称；环境变量前缀为 ``BUYER_NICKNAME_*``，
     词典字段与长度/条数限制见 ``_fetch_dictionary`` 中 ``DORIS_BUYER_NICKNAME_TABLE`` 分支。
+    ``BUYER_NICKNAME_AC_REFRESH_SECS`` 的语义与 ``EXPRESS_AC_REFRESH_SECS`` 相同（含负数关闭 TTL 刷新）。
 
     同样受共享的 ``_last_success_monotonic`` / ``_last_attempt_monotonic`` 影响（见模块顶部说明）。
     """
@@ -469,13 +494,15 @@ def get_buyer_nickname_automaton(force_reload: bool = False) -> Any | None:
     if os.environ.get("BUYER_NICKNAME_USE_AC", "1").strip().lower() in ("0", "false", "no"):
         return None
 
-    refresh = max(0, int(os.environ.get("BUYER_NICKNAME_AC_REFRESH_SECS", "600")))
+    refresh = _parse_ac_refresh_secs("BUYER_NICKNAME_AC_REFRESH_SECS", 600)
     empty_retry = max(0, float(os.environ.get("BUYER_NICKNAME_AC_EMPTY_RETRY_SECS", "45")))
     now = time.monotonic()
 
     with _load_lock:
-        if not force_reload and refresh > 0 and _buyer_nickname_automaton is not None:
-            if _last_success_monotonic > 0 and (now - _last_success_monotonic) < refresh:
+        if not force_reload and _buyer_nickname_automaton is not None:
+            if refresh < 0:
+                return _buyer_nickname_automaton
+            if refresh > 0 and _last_success_monotonic > 0 and (now - _last_success_monotonic) < refresh:
                 return _buyer_nickname_automaton
 
         if (
